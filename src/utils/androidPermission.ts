@@ -56,7 +56,7 @@ async function askNotificationPermission(): Promise<void> {
 
 /** Asks at most once per app session, so chained downloads never re-prompt. */
 export function ensureNotificationPermission(): Promise<void> {
-  if (Platform.OS !== 'android' || Number(Platform.Version) < 34) {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 33) {
     return Promise.resolve();
   }
   notificationPermissionAsked ??= askNotificationPermission();

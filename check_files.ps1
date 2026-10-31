@@ -1,0 +1,1 @@
+Get-ChildItem -Path .\android\app\build\outputs\apk\ -Recurse -Force

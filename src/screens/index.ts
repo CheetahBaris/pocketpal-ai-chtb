@@ -3,6 +3,7 @@ export * from './BenchmarkScreen';
 export * from './ChatScreen';
 export * from './ModelsScreen';
 export * from './PalsScreen';
+export * from './ServerScreen';
 export * from './PlusScreen';
 export * from './SettingsScreen';
 

@@ -15,6 +15,7 @@ import com.facebook.soloader.SoLoader
 import com.pocketpal.KeepAwakePackage
 import com.pocketpal.HardwareInfoPackage
 import com.pocketpal.NavigationBarPackage
+import com.pocketpal.LocalServerPackage
 import com.pocketpal.download.DownloadPackage
 
 class MainApplication : Application(), ReactApplication {
@@ -29,6 +30,7 @@ class MainApplication : Application(), ReactApplication {
               add(HardwareInfoPackage())
               add(DownloadPackage())
               add(NavigationBarPackage())
+              add(LocalServerPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
