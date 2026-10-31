@@ -57,6 +57,7 @@ const createDeps = (overrides: Partial<ServerHandlerDeps> = {}) => {
     getSystemPrompt: () => 'You are a test pal.',
     getPalName: () => 'Test Pal',
     getDefaultParams: jest.fn(async () => ({temperature: 0.1, n_predict: 77})),
+    getContextSize: () => 2048,
     getStopWords: jest.fn(() => ['</s>']),
     log: entry => logs.push(entry),
     ...overrides,
@@ -92,6 +93,7 @@ describe('ServerRequestHandler routing', () => {
 
     expect(recorder.body.pal).toBe('Test Pal');
     expect(recorder.body.status).toBe('ok');
+    expect(recorder.body.context).toBe(2048);
   });
 
   it('answers preflight requests without touching the model', async () => {
@@ -285,6 +287,28 @@ describe('chat completions', () => {
     expect(recorder.jsons[0].status).toBe(400);
     expect(recorder.body.error.type).toBe('invalid_request_error');
     expect(logs.some(entry => entry.kind === 'error')).toBe(true);
+  });
+
+  it('turns a native context-full throw into an actionable 400', async () => {
+    const {deps, completion, logs} = createDeps();
+    completion.mockRejectedValue(new Error('Context is full'));
+    const recorder = new Recorder();
+
+    await new ServerRequestHandler(deps).handle(
+      request({
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body: JSON.stringify({messages: [{role: 'user', content: 'hi'}]}),
+      }),
+      recorder,
+    );
+
+    expect(recorder.jsons[0].status).toBe(400);
+    expect(recorder.body.error.type).toBe('invalid_request_error');
+    expect(recorder.body.error.message).toContain('2048');
+    expect(recorder.body.error.message).toMatch(/context size/i);
+    const errorLog = logs.find(entry => entry.kind === 'error');
+    expect(errorLog?.status).toBe(400);
   });
 
   it('reports a mid-stream failure as an SSE error', async () => {

@@ -252,6 +252,35 @@ export const ServerScreen: React.FC = observer(() => {
                   )}
                 </Text>
               ) : null}
+              <Text style={styles.muted}>
+                {l10n.server.contextSize.replace(
+                  '{{size}}',
+                  String(localServerStore.contextSize),
+                )}
+              </Text>
+              {localServerStore.contextReloadPending ? (
+                <Text style={styles.error}>
+                  {l10n.server.contextReloadPending.replace(
+                    '{{configured}}',
+                    String(localServerStore.configuredContextSize),
+                  )}
+                </Text>
+              ) : null}
+              {localServerStore.palRequestedTokens !== undefined &&
+              localServerStore.palRequestedTokens >
+                localServerStore.contextSize ? (
+                <Text style={styles.error}>
+                  {l10n.server.palTokensWarning
+                    .replace(
+                      '{{tokens}}',
+                      String(localServerStore.palRequestedTokens),
+                    )
+                    .replace(
+                      '{{context}}',
+                      String(localServerStore.contextSize),
+                    )}
+                </Text>
+              ) : null}
             </View>
 
             <Text style={styles.label}>{l10n.server.modelTitle}</Text>

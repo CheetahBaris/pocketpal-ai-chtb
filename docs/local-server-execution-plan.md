@@ -37,6 +37,12 @@ yarn jest src/services/localServer src/utils/__tests__/androidPermission.test.ts
 Итого осталось: **только полный `yarn test` на CI/macOS** (на этой Windows-машине
 падают несвязанные тесты, см. журнал) и оформление PR.
 
+Важно про контекст: `n_ctx` — глобальная настройка Settings
+(`ModelStore.contextInitParams.n_ctx`), а не свойство Pal. Pal задаёт только
+`n_predict` (лимит выходных токенов). Экран Server показывает фактический
+контекст и предупреждает, если `n_predict` больше него; при изменении
+Context Size после загрузки модели `Start server` перезагружает контекст.
+
 ---
 
 ## 2. Порядок работ и точные изменения
@@ -831,3 +837,70 @@ yarn jest src/services/localServer                OK (4 suites, 43 tests)
    не было).
 3. Указать в PR способ проверки: устройство 2211133G, Android 16 (API 36),
    ручной чек-лист F2 + приложить скриншоты экрана Server и уведомления.
+
+### 2026-10-31 — сессия 3 (контекст Pal и ответ 500)
+
+**Симптом.** Pal `ByeDPI` (большой системный промпт, `n_predict: 8192`)
+при заполнении контекста получал `500` с телом, где не было понятной
+причины.
+
+**Диагноз.**
+
+- В логе устройства: `ERR Context is full, 500, 0.3 s`. Строка приходит из
+  `llama.rn/cpp/jsi/RNLlamaJSI.cpp`: промпт целиком не влез в `n_ctx`,
+  генерация ещё не начиналась.
+- Размер контекста — глобальная настройка `ModelStore.contextInitParams.n_ctx`
+  (в БД было `2048`), а не свойство Pal. Pal задаёт только `n_predict`
+  (лимит выходных токенов). Отсюда ощущение, что «настройки Pal не влияют»:
+  они и не должны менять `n_ctx`, но UI об этом не сообщал.
+- Дополнительно: `ModelStore.initContext()` не перезагружает уже загруженную
+  модель, поэтому изменение Context Size в Settings после загрузки не
+  применялось при `Start server`.
+
+**Что сделано.**
+
+1. **Понятная ошибка вместо 500** — `requestHandler.ts`: `CONTEXT_FULL_ERROR`
+   (`/context is full/i`) маппится в `400 invalid_request_error` с текстом,
+   который говорит увеличить Context Size в Settings и перезапустить сервер.
+2. **`finish_reason`** — `openaiApi.ts`: `context_full` теперь отдаётся как
+   `length` (раньше только `stopped_limit`).
+3. **`/health`** — добавлено поле `context` (фактический `n_ctx`).
+4. **Store** — `LocalServerStore.ts`:
+   - `contextSize` — контекст загруженной модели, если сервер обслуживает
+     именно её, иначе значение из Settings;
+   - `palRequestedTokens` — `n_predict` выбранного Pal;
+   - `contextReloadPending` — Settings разошлись с загруженным контекстом;
+   - `configuredContextSize` — значение, которое применит следующая загрузка;
+   - `getContextSize()` в зависимостях обработчика;
+   - lifecycle-запись `Model loaded` теперь содержит `context=… tokens`;
+   - `startServer()` перезагружает модель, если `contextReloadPending`
+     (перед `initContext` вызывается `releaseContext()`), иначе
+     `initContext()` молча переиспользовал старый контекст.
+5. **Экран** — `ServerScreen.tsx`: строка `Context: N tokens (set in
+   Settings, not by the Pal)`, красное предупреждение, если `n_predict` Pal
+   больше контекста, и предупреждение о необходимости перезапуска, если
+   Settings изменены после загрузки.
+6. **Строки** — только `en.json`: `server.contextSize`,
+   `server.contextReloadPending`, `server.palTokensWarning`.
+7. **Тесты** — `requestHandler.test.ts`: `getContextSize` в deps, `context`
+   в `/health`, кейс «Context is full → 400 + сообщение»;
+   `openaiApi.test.ts`: `context_full → finish_reason: "length"`.
+
+**Проверки.**
+
+```text
+yarn typecheck                                   OK (39 s)
+yarn lint                                        OK (0 errors, 46 pre-existing warnings)
+yarn jest src/services/localServer                OK (4 suites, 44 tests)
+.\gradlew.bat :app:assembleProdDebug              BUILD SUCCESSFUL (2m 37s)
+```
+
+На устройстве 2211133G экран Server показал
+`Context: 2048 tokens (set in Settings, not by the Pal)` и предупреждение
+`This pal can generate up to 8192 tokens, but the context is 2048…`.
+Дальнейшую ручную проверку (запрос больше контекста → 400, перезапуск с
+новым Context Size) пользователь продолжил сам.
+
+**Осознанно не делаем.** Автоперезагрузку с бо́льшим контекстом: на слабых
+устройствах это может привести к OOM. Вместо этого показываем лимит и
+просим изменить Settings и перезапустить сервер.

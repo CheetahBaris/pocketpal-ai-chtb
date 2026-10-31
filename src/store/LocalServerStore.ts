@@ -124,6 +124,7 @@ class LocalServerStore {
     getPalName: () => this.selectedPal?.name,
     getSystemPrompt: () => this.systemPrompt,
     getDefaultParams: () => this.defaultParams(),
+    getContextSize: () => this.contextSize,
     getStopWords: requestStops => this.getStopWords(requestStops),
     log: entry => this.pushLog(entry),
   });
@@ -202,6 +203,50 @@ class LocalServerStore {
       modelStore.context &&
       modelStore.activeModelId === model.id
     );
+  }
+
+  /**
+   * The context size requests actually run against: the loaded context when
+   * the served model is the active one, otherwise the configured value the
+   * next load will use. Pals never change this — it lives in Settings.
+   */
+  get contextSize(): number {
+    const model = this.selectedModel;
+    if (
+      model &&
+      modelStore.activeModelId === model.id &&
+      modelStore.activeContextSettings?.n_ctx
+    ) {
+      return modelStore.activeContextSettings.n_ctx;
+    }
+    return modelStore.contextInitParams.n_ctx;
+  }
+
+  /** Max output tokens the selected Pal asks for, when it sets one. */
+  get palRequestedTokens(): number | undefined {
+    const value = Number(this.selectedPal?.completionSettings?.n_predict);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  /**
+   * True when the served model is loaded with a context size that no longer
+   * matches Settings (the user changed it after the load). initContext()
+   * skips an already-loaded model, so Start has to release it first.
+   */
+  get contextReloadPending(): boolean {
+    const model = this.selectedModel;
+    return !!(
+      model &&
+      modelStore.context &&
+      modelStore.activeModelId === model.id &&
+      modelStore.activeContextSettings?.n_ctx !==
+        modelStore.contextInitParams.n_ctx
+    );
+  }
+
+  /** The context size the next model load will use. */
+  get configuredContextSize(): number {
+    return modelStore.contextInitParams.n_ctx;
   }
 
   /** The id advertised by /v1/models and echoed in completions. */
@@ -289,7 +334,7 @@ class LocalServerStore {
 
     try {
       await ensureNotificationPermission();
-      if (!this.modelLoaded) {
+      if (!this.modelLoaded || this.contextReloadPending) {
         const loaded = await this.loadSelectedModel();
         if (!loaded) {
           return false;
@@ -351,8 +396,16 @@ class LocalServerStore {
       this.error = null;
     });
     try {
+      if (this.contextReloadPending) {
+        // The user changed the context size after this model was loaded;
+        // initContext() would otherwise reuse the stale context.
+        await modelStore.releaseContext();
+      }
       await modelStore.initContext(model);
-      this.logLifecycle(`Model loaded: ${model.name}`);
+      this.logLifecycle(
+        `Model loaded: ${model.name}`,
+        `context=${this.contextSize} tokens`,
+      );
       return true;
     } catch (error: any) {
       runInAction(() => {

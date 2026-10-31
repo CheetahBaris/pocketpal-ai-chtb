@@ -26,6 +26,13 @@ import type {
 
 export const DEFAULT_MAX_TOKENS = 512;
 
+/**
+ * llama.rn throws this before any token when the prompt itself does not fit
+ * the loaded context (ctx_shift is off). String-coupled to the native throw in
+ * RNLlamaJSI.cpp; re-check on llama.rn upgrades.
+ */
+const CONTEXT_FULL_ERROR = /context is full/i;
+
 export const normalisePath = (path: string): string => {
   const withoutQuery = path.split('?')[0];
   const trimmed = withoutQuery.replace(/\/+$/, '');
@@ -131,6 +138,7 @@ export class ServerRequestHandler {
           status: 'ok',
           model: this.deps.getModelName(),
           pal: this.deps.getPalName(),
+          context: this.deps.getContextSize(),
           endpoints: [
             'GET /v1/models',
             'POST /v1/chat/completions',
@@ -162,21 +170,31 @@ export class ServerRequestHandler {
       });
     } catch (error: any) {
       const message = error?.message ?? 'Internal server error';
-      const status = error instanceof BadRequestError ? 400 : 500;
+      // A prompt that does not fit is the caller's problem to fix (shorter
+      // messages or a bigger context), not an internal failure. Answer 400 so
+      // OpenAI clients surface the message instead of a generic 5xx.
+      // LLAMARN-DEP: string-coupled to the throw in RNLlamaJSI.cpp.
+      const contextOverflow = CONTEXT_FULL_ERROR.test(message);
+      const status =
+        error instanceof BadRequestError || contextOverflow ? 400 : 500;
       const type =
-        error instanceof BadRequestError
+        error instanceof BadRequestError || contextOverflow
           ? 'invalid_request_error'
           : 'server_error';
+      const friendly = contextOverflow
+        ? `Request exceeds the loaded context size (${this.deps.getContextSize()} tokens). ` +
+          'Increase the context size in Settings and reload the model, or send a shorter conversation.'
+        : message;
 
       if (state.started) {
         // Headers are already on the wire; SSE is the only error channel left.
-        const payload = sseEvent(buildErrorResponse(message, type));
+        const payload = sseEvent(buildErrorResponse(friendly, type));
         res.sseChunk(payload);
         res.sseChunk(SSE_DONE);
         res.sseEnd();
         state.bytes += payload.length + SSE_DONE.length;
       } else {
-        const body = buildErrorResponse(message, type);
+        const body = buildErrorResponse(friendly, type);
         res.json(status, body);
         state.bytes += body.length;
       }
@@ -190,9 +208,9 @@ export class ServerRequestHandler {
         path: normalisePath(req.path),
         status,
         durationMs: this.now() - started,
-        detail: message,
+        detail: friendly,
         model: this.deps.getModelName(),
-        summary: message,
+        summary: friendly,
       });
     }
   }

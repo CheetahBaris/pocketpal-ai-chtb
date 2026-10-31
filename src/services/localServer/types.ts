@@ -62,6 +62,8 @@ export interface ServerHandlerDeps {
   getPalName(): string | undefined;
   /** Global + Pal generation defaults (messages/tools excluded). */
   getDefaultParams(): Promise<Record<string, unknown>>;
+  /** Effective context size of the loaded model, in tokens. */
+  getContextSize(): number;
   /** Stops from the request plus the loaded model's own stop words. */
   getStopWords(requestStops?: string[]): string[];
   log(entry: ServerLogEntry): void;

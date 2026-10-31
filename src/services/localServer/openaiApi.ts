@@ -187,10 +187,11 @@ export interface CompletionPayload {
   finishReason?: string;
 }
 
-/** `stopped_limit` is the only result field that means the token cap hit. */
+/** `stopped_limit` and `context_full` both mean generation hit a ceiling. */
 export const finishReasonFromResult = (result: {
   stopped_limit?: number;
-}): string => (result.stopped_limit ? 'length' : 'stop');
+  context_full?: boolean;
+}): string => (result.stopped_limit || result.context_full ? 'length' : 'stop');
 
 export const buildModelsResponse = (
   modelIds: string[],

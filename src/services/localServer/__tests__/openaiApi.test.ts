@@ -169,9 +169,10 @@ describe('response builders', () => {
 });
 
 describe('result helpers', () => {
-  it('maps stopped_limit to length', () => {
+  it('maps stopped_limit and context_full to length', () => {
     expect(finishReasonFromResult({})).toBe('stop');
     expect(finishReasonFromResult({stopped_limit: 1})).toBe('length');
+    expect(finishReasonFromResult({context_full: true})).toBe('length');
   });
 
   it('derives usage', () => {
