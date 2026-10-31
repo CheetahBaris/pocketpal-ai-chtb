@@ -1,6 +1,10 @@
 import {v4 as uuidv4} from 'uuid';
 
-import type {CompletionResult} from '../../utils/completionTypes';
+import type {
+  CompletionResult,
+  CompletionStreamData,
+} from '../../utils/completionTypes';
+import {stopQuietly} from '../../utils/stopQuietly';
 import {prettyJson, truncate} from './log';
 import {
   BadRequestError,
@@ -19,6 +23,7 @@ import {
 } from './openaiApi';
 import {mergeSystemPrompt} from './prompt';
 import type {
+  ServerEngine,
   ServerHandlerDeps,
   ServerRequest,
   ServerResponseWriter,
@@ -309,11 +314,11 @@ export class ServerRequestHandler {
           }
           if (!stopRequested && res.isClosed()) {
             stopRequested = true;
-            engine.stopCompletion().catch(() => {});
+            stopQuietly(() => engine.stopCompletion());
           }
         };
 
-        const result = await engine.completion(params, data => {
+        const result = await this.complete(engine, params, data => {
           flush(data.content ?? '', data.reasoning_content ?? '');
         });
 
@@ -360,7 +365,7 @@ export class ServerRequestHandler {
         return;
       }
 
-      const result = await engine.completion(params);
+      const result = await this.complete(engine, params);
       const content = result.content ?? result.text ?? '';
       const body = buildChatCompletionResponse({
         id,
@@ -420,7 +425,7 @@ export class ServerRequestHandler {
       state.started = true;
       res.sseStart();
       let streamed = '';
-      const result = await engine.completion(params, data => {
+      const result = await this.complete(engine, params, data => {
         if (data.token) {
           streamed += data.token;
           this.streamChunk(
@@ -435,7 +440,7 @@ export class ServerRequestHandler {
           );
         }
         if (res.isClosed()) {
-          engine.stopCompletion().catch(() => {});
+          stopQuietly(() => engine.stopCompletion());
         }
       });
       this.streamChunk(
@@ -465,7 +470,7 @@ export class ServerRequestHandler {
       return;
     }
 
-    const result = await engine.completion(params);
+    const result = await this.complete(engine, params);
     const text = result.text ?? '';
     const body = buildCompletionResponse({
       id,
@@ -483,6 +488,27 @@ export class ServerRequestHandler {
         content: truncate(text, RESPONSE_PREVIEW_LIMIT),
       }),
     });
+  }
+
+  /**
+   * Runs one completion and reports generation state to the store. The token
+   * callback is always attached so the store can count tokens even when the
+   * response itself is not streamed.
+   */
+  private async complete(
+    engine: ServerEngine,
+    params: Record<string, unknown>,
+    onToken?: (data: CompletionStreamData) => void,
+  ): Promise<CompletionResult> {
+    this.deps.onGenerationStart();
+    try {
+      return await engine.completion(params, data => {
+        this.deps.onGenerationToken();
+        onToken?.(data);
+      });
+    } finally {
+      this.deps.onGenerationEnd();
+    }
   }
 
   private streamChunk(

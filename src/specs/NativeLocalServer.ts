@@ -6,6 +6,9 @@ export interface LocalServerStatus {
   running: boolean;
   port: number;
   allowLan: boolean;
+  /** Socket bytes received/sent since the listener started. */
+  bytesIn: number;
+  bytesOut: number;
 }
 
 /**

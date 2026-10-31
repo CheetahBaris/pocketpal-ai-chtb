@@ -33,6 +33,7 @@ yarn jest src/services/localServer src/utils/__tests__/androidPermission.test.ts
 | D. Уведомление | ✅ готово | `LocalServerService.kt`, `LocalServerNotifications.kt`, manifest, `updateNotification`, события действий |
 | E. Кнопки Stop / Stop+Unload | ✅ готово | кнопки на экране, методы store уже были |
 | F. Приёмка | ✅ готово | typecheck/lint/целевые тесты/Kotlin-компиляция зелёные; `assembleProdDebug` собран; ручной чек-лист F2 пройден на устройстве 2211133G (Android 16) |
+| G. Живой статус | ✅ готово | состояние генерации и tok/s на экране и в уведомлении, счётчики трафика из сокетов, статичная иконка, исправлена ошибка `onClientClosed` и ложное «client closed» |
 
 Итого осталось: **только полный `yarn test` на CI/macOS** (на этой Windows-машине
 падают несвязанные тесты, см. журнал) и оформление PR.
@@ -910,3 +911,66 @@ yarn jest src/services/localServer                OK (4 suites, 44 tests)
 `adb install -r` (`versionName=1.21.2`, `lastUpdateTime=19:44`). Ассет в
 релизе `v1.21.2-local-server` заменён на эту сборку (digest совпадает),
 описание обновлено, тег переведён на `58794d6`.
+
+### 2026-10-31 — сессия 4 (трафик, статус генерации, `onClientClosed`)
+
+**1. Трафик и иконка уведомления.**
+
+- `LocalServerModule.kt`: добавлены `AtomicLong` счётчики `bytesIn` /
+  `bytesOut`. Входящие считаются по строке запроса, заголовкам и телу;
+  исходящие — в `ClientConnection.write()` (включая заголовки ответа).
+  Счётчики сбрасываются в `start()` и отдаются в `getStatus()` как
+  `bytesIn` / `bytesOut`.
+- `LocalServerNotifications.kt`: иконка `stat_sys_upload` (анимированная)
+  заменена на статичную `stat_notify_chat`. В уведомлении:
+  `contentText` — статус генерации, `subText` — трафик, `BigTextStyle` —
+  модель, адрес, статус, трафик и число запросов.
+- `LocalServerStore.ts`: раз в секунду тикер опрашивает `getStatus()`,
+  обновляет счётчики и перерисовывает уведомление; тикер стартует вместе с
+  сервером и останавливается в `releaseResources()`. Байты форматируются в
+  B/KB/MB/GB (`formatBytes`). Новые строки в `en.json`:
+  `notificationIdle`, `notificationGenerating`, `notificationTraffic`,
+  `notificationRequests`.
+
+**2. `TypeError: Cannot read property 'catch' of undefined`.**
+
+- Причина: `modelStore.context?.stopCompletion().catch(...)` — в этой сборке
+  `stopCompletion()` может вернуть `undefined`, и `.catch` падал в
+  `onClientClosed`. Все такие вызовы заменены на `stopQuietly(() => ...)`
+  (`src/utils/stopQuietly.ts`) в store и в `requestHandler.ts`.
+- Вторая причина «запрос есть, ответа нет»: `handleClient` ждал EOF на
+  чтении и считал это закрытием клиента. Клиент, который закрывает свою
+  сторону записи после тела запроса (half-close), получал `clientClosed`
+  ещё до ответа, и `handleRequest` молча пропускал запрос. Теперь EOF
+  больше не считается отключением: сокет живёт до ответа, а реальный обрыв
+  определяется ошибкой записи в `ClientConnection`, которая эмитит
+  `clientClosed` и убирает соединение из map.
+
+**3. Статус генерации и tok/s.**
+
+- `ServerHandlerDeps`: `onGenerationStart/Token/End`. В
+  `requestHandler.ts` все четыре вызова `engine.completion` идут через
+  `complete()`, который включает состояние перед prefill, считает каждый
+  токен из callback (даже для non-streaming) и гарантированно выключает
+  состояние в `finally`.
+- `LocalServerStore.ts`: `generating`, `generatedTokens`, `generationRate`.
+  Токены считаются в необзервабливом счётчике, раз в секунду синхронизируются
+  на экран; tok/s — от первого токена, чтобы prefill не занижал скорость.
+- `ServerScreen.tsx`: при генерации — `Generating · N tokens · X tok/s`,
+  при простое — `Idle — waiting for requests`. В уведомлении — то же
+  состояние и скорость.
+
+**Проверки.**
+
+```text
+yarn typecheck                                   OK (18 s)
+yarn lint                                        OK (0 errors, 46 warnings)
+yarn jest src/services/localServer \
+  src/utils/__tests__/stopQuietly.test.ts \
+  src/locales/__tests__/locales.test.ts          OK (6 suites, 160 tests)
+.\gradlew.bat :app:compileProdDebugKotlin         BUILD SUCCESSFUL (2m 29s)
+```
+
+Добавлены тесты: generation-хуки вызываются (start/token/end) и `end`
+срабатывает при ошибке движка; ожидание параметров completion переведено на
+`mock.calls[0][0]`, потому что теперь всегда передаётся callback.

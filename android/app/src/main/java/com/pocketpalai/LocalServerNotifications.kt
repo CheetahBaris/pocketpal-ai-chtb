@@ -48,6 +48,9 @@ class LocalServerNotifications(private val context: Context) {
     val title = payload.optString("title").ifEmpty { DEFAULT_TITLE }
     val model = payload.optString("model")
     val address = payload.optString("address")
+    val status = payload.optString("status")
+    val traffic = payload.optString("traffic")
+    val bigText = payload.optString("bigText")
     val requests = payload.optInt("requests", 0)
     val channelName =
         payload.optString("channelName").ifEmpty { DEFAULT_CHANNEL_NAME }
@@ -63,14 +66,17 @@ class LocalServerNotifications(private val context: Context) {
         }
 
     builder
-        .setSmallIcon(android.R.drawable.stat_sys_upload)
+        .setSmallIcon(android.R.drawable.stat_notify_chat)
         .setContentTitle(title)
-        .setContentText(model)
-        .setSubText(address)
+        .setContentText(status.ifEmpty { model })
+        .setSubText(traffic.ifEmpty { address })
         .setOngoing(true)
         .setOnlyAlertOnce(true)
         .setCategory(Notification.CATEGORY_SERVICE)
         .setContentIntent(launchIntent)
+    if (bigText.isNotEmpty()) {
+      builder.setStyle(Notification.BigTextStyle().bigText(bigText))
+    }
     if (requests > 0) {
       builder.setNumber(requests)
     }

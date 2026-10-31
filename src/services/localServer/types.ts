@@ -66,5 +66,11 @@ export interface ServerHandlerDeps {
   getContextSize(): number;
   /** Stops from the request plus the loaded model's own stop words. */
   getStopWords(requestStops?: string[]): string[];
+  /** A completion is about to start (prefill included). */
+  onGenerationStart(): void;
+  /** One token was produced; called from the engine callback. */
+  onGenerationToken(): void;
+  /** The completion settled, successfully or not. */
+  onGenerationEnd(): void;
   log(entry: ServerLogEntry): void;
 }

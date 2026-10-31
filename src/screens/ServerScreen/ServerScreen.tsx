@@ -106,8 +106,22 @@ export const ServerScreen: React.FC = observer(() => {
               </Text>
             </View>
 
-            {localServerStore.busy ? (
+            {localServerStore.generating ? (
+              <Text style={styles.muted}>
+                {l10n.server.generatingStatus
+                  .replace(
+                    '{{tokens}}',
+                    String(localServerStore.generatedTokens),
+                  )
+                  .replace(
+                    '{{rate}}',
+                    localServerStore.generationRate.toFixed(1),
+                  )}
+              </Text>
+            ) : localServerStore.busy ? (
               <Text style={styles.muted}>{l10n.server.busy}</Text>
+            ) : localServerStore.running ? (
+              <Text style={styles.muted}>{l10n.server.idleStatus}</Text>
             ) : null}
 
             {localServerStore.error ? (

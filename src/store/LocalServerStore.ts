@@ -11,6 +11,7 @@ import {Model, ModelOrigin, ModelType} from '../utils/types';
 import {acquireKeepAwake} from '../utils/keepAwake';
 import {ensureNotificationPermission} from '../utils/androidPermission';
 import {resolveSystemPrompt} from '../utils/systemPromptResolver';
+import {stopQuietly} from '../utils/stopQuietly';
 import {appendServerLog} from '../services/localServer/log';
 import {BadRequestError} from '../services/localServer/openaiApi';
 import {ServerRequestHandler} from '../services/localServer/requestHandler';
@@ -85,6 +86,23 @@ const cleanStopWords = (value: unknown): string[] => {
   return [];
 };
 
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+/** Compact byte count for the notification ("1.2 MB", "340 KB"). */
+const formatBytes = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '0 B';
+  }
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < BYTE_UNITS.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const rounded = unit === 0 || size >= 10 ? Math.round(size) : size.toFixed(1);
+  return `${rounded} ${BYTE_UNITS[unit]}`;
+};
+
 /**
  * Owns the built-in OpenAI-compatible server: the selected model/Pal, the
  * listen port and LAN switch, the request queue that serialises inference
@@ -103,6 +121,19 @@ class LocalServerStore {
   requestCount = 0;
   lastRequestAt: number | null = null;
   logs: ServerLogEntry[] = [];
+
+  /** True while a completion is running; drives the screen and notification. */
+  generating = false;
+  generatedTokens = 0;
+  generationRate = 0;
+
+  // Internal counters, excluded from MobX so traffic/token ticks do not
+  // re-render the screen on every token.
+  trafficIn = 0;
+  trafficOut = 0;
+  liveTokens = 0;
+  firstTokenAt = 0;
+  statusTimer: ReturnType<typeof setInterval> | null = null;
 
   private keepAwakeRelease: (() => void) | null = null;
   private lanIp: string | null = null;
@@ -126,11 +157,24 @@ class LocalServerStore {
     getDefaultParams: () => this.defaultParams(),
     getContextSize: () => this.contextSize,
     getStopWords: requestStops => this.getStopWords(requestStops),
+    onGenerationStart: () => this.beginGeneration(),
+    onGenerationToken: () => this.noteGenerationToken(),
+    onGenerationEnd: () => this.endGeneration(),
     log: entry => this.pushLog(entry),
   });
 
   constructor() {
-    makeAutoObservable(this, {}, {autoBind: true});
+    makeAutoObservable(
+      this,
+      {
+        trafficIn: false,
+        trafficOut: false,
+        liveTokens: false,
+        firstTokenAt: false,
+        statusTimer: false,
+      },
+      {autoBind: true},
+    );
 
     makePersistable(this, {
       name: 'LocalServerStore',
@@ -354,6 +398,7 @@ class LocalServerStore {
       this.holdResources();
       await this.refreshLanIp();
       this.updateNotification(true);
+      this.startStatusTimer();
       this.logLifecycle(
         `Server started on ${this.allowLan ? '0.0.0.0' : '127.0.0.1'}:${
           this.port
@@ -425,7 +470,7 @@ class LocalServerStore {
     }
     if (this.activeRequestId) {
       // Do not leave a socket-less generation burning CPU.
-      modelStore.context?.stopCompletion().catch(() => {});
+      stopQuietly(() => modelStore.context?.stopCompletion());
     }
     try {
       await NativeLocalServer!.stop();
@@ -477,6 +522,7 @@ class LocalServerStore {
   }
 
   private releaseResources(): void {
+    this.stopStatusTimer();
     modelStore.enableAutoRelease(AUTO_RELEASE_REASON);
     this.keepAwakeRelease?.();
     this.keepAwakeRelease = null;
@@ -528,6 +574,9 @@ class LocalServerStore {
             this.holdResources();
           }
         });
+        if (status.running) {
+          this.startStatusTimer();
+        }
       })
       .catch(() => {});
   }
@@ -555,7 +604,7 @@ class LocalServerStore {
     this.closedRequests.add(requestId);
     if (this.activeRequestId === requestId) {
       // The client is gone; stop burning tokens for nobody.
-      modelStore.context?.stopCompletion().catch(() => {});
+      stopQuietly(() => modelStore.context?.stopCompletion());
     }
   }
 
@@ -699,16 +748,117 @@ class LocalServerStore {
     }
   }
 
+  private beginGeneration(): void {
+    runInAction(() => {
+      this.generating = true;
+      this.generatedTokens = 0;
+      this.generationRate = 0;
+      this.liveTokens = 0;
+      this.firstTokenAt = 0;
+    });
+    this.updateNotification(true);
+  }
+
+  private noteGenerationToken(): void {
+    this.liveTokens += 1;
+    if (!this.firstTokenAt) {
+      this.firstTokenAt = Date.now();
+    }
+  }
+
+  private endGeneration(): void {
+    const tokens = this.liveTokens;
+    const elapsed = this.firstTokenAt
+      ? (Date.now() - this.firstTokenAt) / 1000
+      : 0;
+    runInAction(() => {
+      this.generating = false;
+      this.generatedTokens = tokens;
+      this.generationRate = elapsed > 0 ? tokens / elapsed : 0;
+    });
+    this.liveTokens = 0;
+    this.firstTokenAt = 0;
+    this.updateNotification(true);
+  }
+
+  /** Refreshes the visible token count/rate while a completion is running. */
+  private syncGenerationStats(): void {
+    if (!this.generating) {
+      return;
+    }
+    const elapsed = this.firstTokenAt
+      ? (Date.now() - this.firstTokenAt) / 1000
+      : 0;
+    runInAction(() => {
+      this.generatedTokens = this.liveTokens;
+      this.generationRate = elapsed > 0 ? this.liveTokens / elapsed : 0;
+    });
+  }
+
+  private startStatusTimer(): void {
+    if (!this.supported || this.statusTimer) {
+      return;
+    }
+    this.statusTimer = setInterval(() => {
+      this.refreshLiveStatus().catch(() => {});
+    }, 1000);
+  }
+
+  private stopStatusTimer(): void {
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer);
+      this.statusTimer = null;
+    }
+  }
+
+  /** Pulls socket byte counters and refreshes the ongoing notification. */
+  private async refreshLiveStatus(): Promise<void> {
+    if (!this.running) {
+      this.stopStatusTimer();
+      return;
+    }
+    try {
+      const status = await NativeLocalServer!.getStatus();
+      this.trafficIn = status.bytesIn ?? 0;
+      this.trafficOut = status.bytesOut ?? 0;
+    } catch {
+      // Keep the last known counters; the listener itself is unaffected.
+    }
+    this.syncGenerationStats();
+    this.updateNotification(true);
+  }
+
   private notificationPayload(): string {
     const address =
       this.allowLan && this.lanIp
         ? `http://${this.lanIp}:${this.port}`
         : this.baseUrl;
+    const traffic = uiStore.l10n.server.notificationTraffic
+      .replace('{{in}}', formatBytes(this.trafficIn))
+      .replace('{{out}}', formatBytes(this.trafficOut));
+    const status = this.generating
+      ? uiStore.l10n.server.notificationGenerating
+          .replace('{{tokens}}', String(this.generatedTokens))
+          .replace('{{rate}}', this.generationRate.toFixed(1))
+      : uiStore.l10n.server.notificationIdle;
+    const bigText = [
+      this.servedModelName,
+      address,
+      status,
+      traffic,
+      uiStore.l10n.server.notificationRequests.replace(
+        '{{count}}',
+        String(this.requestCount),
+      ),
+    ].join('\n');
     return JSON.stringify({
       title: uiStore.l10n.server.notificationTitle,
       model: this.servedModelName,
       address,
       requests: this.requestCount,
+      status,
+      traffic,
+      bigText,
       channelName: uiStore.l10n.server.notificationChannel,
       stopLabel: uiStore.l10n.server.stop,
       unloadLabel: uiStore.l10n.server.stopAndUnload,

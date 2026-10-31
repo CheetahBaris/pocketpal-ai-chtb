@@ -59,6 +59,9 @@ const createDeps = (overrides: Partial<ServerHandlerDeps> = {}) => {
     getDefaultParams: jest.fn(async () => ({temperature: 0.1, n_predict: 77})),
     getContextSize: () => 2048,
     getStopWords: jest.fn(() => ['</s>']),
+    onGenerationStart: jest.fn(),
+    onGenerationToken: jest.fn(),
+    onGenerationEnd: jest.fn(),
     log: entry => logs.push(entry),
     ...overrides,
   };
@@ -147,7 +150,7 @@ describe('chat completions', () => {
     expect(recorder.jsons[0].status).toBe(200);
     expect(recorder.body.choices[0].message.content).toBe('Hello');
     expect(recorder.body.usage.total_tokens).toBe(5);
-    expect(completion).toHaveBeenCalledWith(
+    expect(completion.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         n_predict: 32,
         temperature: 0.9,
@@ -220,6 +223,47 @@ describe('chat completions', () => {
       .join('');
     expect(content).toBe('Hello');
     expect(events[events.length - 1].choices[0].finish_reason).toBe('stop');
+  });
+
+  it('reports generation start, tokens and end around a completion', async () => {
+    const {deps, completion} = createDeps();
+    completion.mockImplementation(async (_params, onToken) => {
+      onToken?.({token: 'a', content: 'a'});
+      onToken?.({token: 'b', content: 'ab'});
+      return {text: 'ab', content: 'ab'};
+    });
+    const recorder = new Recorder();
+
+    await new ServerRequestHandler(deps).handle(
+      request({
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body: JSON.stringify({messages: [{role: 'user', content: 'hi'}]}),
+      }),
+      recorder,
+    );
+
+    expect(deps.onGenerationStart).toHaveBeenCalledTimes(1);
+    expect(deps.onGenerationToken).toHaveBeenCalledTimes(2);
+    expect(deps.onGenerationEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends generation reporting when the engine throws', async () => {
+    const {deps, completion} = createDeps();
+    completion.mockRejectedValue(new Error('boom'));
+    const recorder = new Recorder();
+
+    await new ServerRequestHandler(deps).handle(
+      request({
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body: JSON.stringify({messages: [{role: 'user', content: 'hi'}]}),
+      }),
+      recorder,
+    );
+
+    expect(deps.onGenerationStart).toHaveBeenCalledTimes(1);
+    expect(deps.onGenerationEnd).toHaveBeenCalledTimes(1);
   });
 
   it('merges the pal system prompt ahead of the client one', async () => {

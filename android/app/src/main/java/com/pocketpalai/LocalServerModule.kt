@@ -21,6 +21,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Minimal HTTP/1.1 listener for the built-in OpenAI-compatible server.
@@ -38,6 +39,8 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
   private var acceptThread: Thread? = null
   private val connections = ConcurrentHashMap<String, ClientConnection>()
   private val running = AtomicBoolean(false)
+  private val bytesIn = AtomicLong(0)
+  private val bytesOut = AtomicLong(0)
 
   @Volatile private var boundPort: Int = 0
   @Volatile private var allowLan: Boolean = false
@@ -71,6 +74,8 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
       serverSocket = socket
       boundPort = requestedPort
       this.allowLan = allowLan
+      bytesIn.set(0)
+      bytesOut.set(0)
       running.set(true)
 
       acceptThread = Thread({ acceptLoop(socket) }, "LocalServerAccept").apply {
@@ -130,6 +135,9 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
           .put("model", "")
           .put("address", "http://127.0.0.1:$boundPort")
           .put("requests", 0)
+          .put("status", "")
+          .put("traffic", "")
+          .put("bigText", "")
           .put("channelName", LocalServerNotifications.DEFAULT_CHANNEL_NAME)
           .put("stopLabel", LocalServerNotifications.DEFAULT_STOP)
           .put("unloadLabel", LocalServerNotifications.DEFAULT_UNLOAD)
@@ -225,8 +233,10 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
     try {
       socket.soTimeout = HEADER_TIMEOUT_MS
       val input = BufferedInputStream(socket.getInputStream())
+      var received = 0
 
       val requestLine = readLine(input) ?: return
+      received += requestLine.toByteArray(Charsets.UTF_8).size + 2
       val parts = requestLine.split(" ")
       if (parts.size < 2) {
         return
@@ -244,6 +254,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
       var headerBytes = 0
       while (true) {
         val line = readLine(input) ?: break
+        received += line.toByteArray(Charsets.UTF_8).size + 2
         if (line.isEmpty()) {
           break
         }
@@ -263,14 +274,21 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
         throw IllegalArgumentException("Request body too large")
       }
       val body = readBody(input, contentLength)
+      received += contentLength
+      bytesIn.addAndGet(received.toLong())
 
-      requestId = UUID.randomUUID().toString()
-      val connection = ClientConnection(socket)
+      val id = UUID.randomUUID().toString()
+      requestId = id
+      val connection =
+          ClientConnection(socket, id, bytesOut) { abortedId ->
+            connections.remove(abortedId)?.closeNow()
+            emitClientClosed(abortedId)
+          }
       connection.start()
-      connections[requestId] = connection
+      connections[id] = connection
 
       val params = Arguments.createMap().apply {
-        putString("requestId", requestId)
+        putString("requestId", id)
         putString("method", method)
         putString("path", path)
         putString("headers", JSONObject(headers).toString())
@@ -279,18 +297,9 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
       }
       emit("LocalServer:request", params)
 
-      // Blocks until the peer hangs up, so a client that goes away while the
-      // model is still generating can cancel its work.
-      try {
-        socket.soTimeout = 0
-        while (input.read() != -1) {
-          // Requests are not pipelined; ignore anything after the first one.
-        }
-      } catch (_: Exception) {
-        // Treated the same as a regular disconnect.
-      }
-      emitClientClosed(requestId)
-      connections.remove(requestId)?.closeNow()
+      // The connection stays open until the response is written or the writer
+      // reports a real disconnect. EOF on the request stream only means the
+      // client sent nothing else; it does not mean it stopped reading.
     } catch (e: Exception) {
       Log.w(TAG, "Failed to handle request", e)
       if (requestId != null) {
@@ -332,6 +341,8 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
         putBoolean("running", running.get())
         putInt("port", boundPort)
         putBoolean("allowLan", allowLan)
+        putDouble("bytesIn", bytesIn.get().toDouble())
+        putDouble("bytesOut", bytesOut.get().toDouble())
       }
 
   private fun closeServerSocket() {
@@ -423,7 +434,12 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
    * One socket plus a writer thread. Writes are queued so a slow client never
    * blocks the JS thread while tokens are streaming.
    */
-  private class ClientConnection(private val socket: Socket) {
+  private class ClientConnection(
+      private val socket: Socket,
+      private val requestId: String,
+      private val bytesOut: AtomicLong,
+      private val onAborted: (String) -> Unit,
+  ) {
     private val output = BufferedOutputStream(socket.getOutputStream())
     private val queue = LinkedBlockingQueue<ByteArray>()
     private val endMarker = ByteArray(0)
@@ -431,6 +447,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
     private val writer =
         Thread(
                 {
+                  var failed = false
                   try {
                     while (true) {
                       val bytes = queue.take()
@@ -441,8 +458,12 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
                       output.flush()
                     }
                   } catch (_: Exception) {
+                    failed = true
                   } finally {
                     closeQuietly()
+                  }
+                  if (failed) {
+                    onAborted(requestId)
                   }
                 },
                 "LocalServerWriter")
@@ -456,6 +477,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
 
     fun write(bytes: ByteArray) {
       if (!closed.get()) {
+        bytesOut.addAndGet(bytes.size.toLong())
         queue.offer(bytes)
       }
     }
