@@ -146,10 +146,12 @@ class LocalServerStore {
   private keepAwakeRelease: (() => void) | null = null;
   private lanIp: string | null = null;
   private lastNotificationAt = 0;
+  private lastStatusRefreshAt = 0;
   private eventEmitter: NativeEventEmitter<{
     'LocalServer:request': [LocalServerRequestEvent];
     'LocalServer:clientClosed': [LocalServerClientClosedEvent];
     'LocalServer:notificationAction': [{action: 'stop' | 'stop-and-unload'}];
+    'LocalServer:tick': [];
   }> | null = null;
   private subscriptions: Array<{remove: () => void}> = [];
   private queue: Promise<void> = Promise.resolve();
@@ -567,6 +569,14 @@ class LocalServerStore {
           },
         ),
       );
+      // Native heartbeat: Android pauses JS timers in the background, so the
+      // module pokes us once a second to keep metrics and the notification
+      // fresh while another app is on screen.
+      this.subscriptions.push(
+        this.eventEmitter.addListener('LocalServer:tick', () =>
+          this.onNativeTick(),
+        ),
+      );
     } catch (error) {
       console.warn('Failed to attach local server events:', error);
     }
@@ -819,12 +829,30 @@ class LocalServerStore {
     }
   }
 
+  /**
+   * Native one-second heartbeat. Timers freeze in the background, so this is
+   * what keeps the notification's metrics moving while the app is not on
+   * screen; the interval above covers the foreground. Both funnel through the
+   * same debounce.
+   */
+  private onNativeTick(): void {
+    if (!this.running) {
+      return;
+    }
+    this.refreshLiveStatus().catch(() => {});
+  }
+
   /** Pulls socket byte counters and refreshes the ongoing notification. */
   private async refreshLiveStatus(): Promise<void> {
     if (!this.running) {
       this.stopStatusTimer();
       return;
     }
+    const now = Date.now();
+    if (now - this.lastStatusRefreshAt < 500) {
+      return;
+    }
+    this.lastStatusRefreshAt = now;
     try {
       const status = await NativeLocalServer!.getStatus();
       this.trafficIn = status.bytesIn ?? 0;

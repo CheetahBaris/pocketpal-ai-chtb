@@ -28,6 +28,10 @@ export interface LocalServerStatus {
  * emitted to JS as `LocalServer:request`; JS answers through `respond` (one
  * shot) or `streamStart`/`streamChunk`/`streamEnd` (SSE). A client that hangs
  * up before the response is finished is reported as `LocalServer:clientClosed`.
+ *
+ * While the listener runs, native emits `LocalServer:tick` once a second.
+ * Android pauses JS timers in the background, so the tick is what keeps the
+ * notification's metrics refreshing when another app is on screen.
  */
 export interface Spec extends TurboModule {
   // Required by NativeEventEmitter.

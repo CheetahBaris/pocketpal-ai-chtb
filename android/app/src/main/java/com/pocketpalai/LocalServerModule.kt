@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Debug
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -55,6 +57,23 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
   private var cpuSampleCpuMs = 0L
   private var lastCpuPercent = 0.0
 
+  // Once a second, nudge JS to refresh the notification. Android freezes
+  // `setInterval` while the app is in the background, so the metrics (traffic,
+  // CPU, RAM, battery) would otherwise stop updating until the user returns.
+  // Events still reach JS in the background — that is how the server answers
+  // requests — so the tick keeps the notification alive.
+  private val heartbeatHandler = Handler(Looper.getMainLooper())
+  private val heartbeat =
+      object : Runnable {
+        override fun run() {
+          if (!running.get()) {
+            return
+          }
+          emit("LocalServer:tick", Arguments.createMap())
+          heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
+        }
+      }
+
   init {
     instanceRef = WeakReference(this)
   }
@@ -92,6 +111,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
         isDaemon = true
         start()
       }
+      startHeartbeat()
       // Show a notification immediately; JS replaces it with localised text.
       // A notification failure must not take the listener down with it.
       try {
@@ -114,6 +134,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
   override fun stop(promise: Promise) {
     try {
       running.set(false)
+      stopHeartbeat()
       closeServerSocket()
       connections.values.forEach { it.closeNow() }
       connections.clear()
@@ -211,6 +232,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
 
   override fun invalidate() {
     running.set(false)
+    stopHeartbeat()
     closeServerSocket()
     connections.values.forEach { it.closeNow() }
     connections.clear()
@@ -225,6 +247,15 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
     emit("LocalServer:notificationAction", Arguments.createMap().apply {
       putString("action", action)
     })
+  }
+
+  private fun startHeartbeat() {
+    heartbeatHandler.removeCallbacks(heartbeat)
+    heartbeatHandler.postDelayed(heartbeat, HEARTBEAT_INTERVAL_MS)
+  }
+
+  private fun stopHeartbeat() {
+    heartbeatHandler.removeCallbacks(heartbeat)
   }
 
   private fun acceptLoop(socket: ServerSocket) {
@@ -584,6 +615,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
     private const val HEADER_TIMEOUT_MS = 15_000
     private const val MAX_HEADER_BYTES = 64 * 1024
     private const val MAX_BODY_BYTES = 32 * 1024 * 1024
+    private const val HEARTBEAT_INTERVAL_MS = 1000L
 
     private var instanceRef: WeakReference<LocalServerModule>? = null
 
