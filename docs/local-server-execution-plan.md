@@ -35,6 +35,7 @@ yarn jest src/services/localServer src/utils/__tests__/androidPermission.test.ts
 | F. Приёмка | ✅ готово | typecheck/lint/целевые тесты/Kotlin-компиляция зелёные; `assembleProdDebug` собран; ручной чек-лист F2 пройден на устройстве 2211133G (Android 16) |
 | G. Живой статус | ✅ готово | состояние генерации и tok/s на экране и в уведомлении, счётчики трафика из сокетов, статичная иконка, исправлена ошибка `onClientClosed` и ложное «client closed» |
 | H. Маскот и ресурсы | ✅ готово | иконка уведомления — маскот (силуэт в статус-баре и анимированный крупный значок во время генерации), мониторинг CPU/RAM/батареи на экране и в уведомлении, полные тела запросов/ответов в логах |
+| I. Pal ByeDPI | ✅ готово | встроенный Pal с промптом, настройками генерации, pact и моделью по умолчанию; сеется один раз, существующий не перезаписывает |
 
 Итого осталось: **только полный `yarn test` на CI/macOS** (на этой Windows-машине
 падают несвязанные тесты, см. журнал) и оформление PR.
@@ -1031,3 +1032,27 @@ yarn lint                                        OK (0 errors)
 ```
 
 Установлено на 2211133G через `adb install -r`.
+
+### 2026-11-02 — сессия 6 (встроенный Pal ByeDPI)
+
+- `src/store/builtinPals.ts`: системный промпт, `completionSettings`
+  (`n_predict: 2048`, `temperature: 0.25`, `top_k: 35`, `top_p: 0.9`,
+  `stop: ["</s>"]`, `jinja`, `enable_thinking`), pact (render_html,
+  calculate, web_search, read_url, datetime) и рекомендуемая модель
+  Qwen2.5-3B-Instruct Q4_K_M. Промпт, настройки и pact сняты с рабочей базы
+  устройства (`local_pals`), чтобы Pal вёл себя как настроенный вручную.
+- `PalStore.initializeByeDpiPal()`: сеет Pal один раз по ключу
+  `PalStore.builtin.ByeDPI.seeded`; если Pal с таким именем уже есть (как на
+  устройстве пользователя), запись не перезаписывается, дубликат не
+  создаётся, а ключ всё равно проставляется — значит правки промпта
+  переживают обновления приложения.
+
+**Проверки.**
+
+```text
+yarn typecheck                                   OK
+yarn lint                                        OK (0 errors)
+.\gradlew.bat :app:assembleProdDebug             BUILD SUCCESSFUL
+```
+
+Установлено на 2211133G; приложение стартует без ошибок JS.
