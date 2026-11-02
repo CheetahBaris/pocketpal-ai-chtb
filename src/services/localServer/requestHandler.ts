@@ -55,12 +55,10 @@ interface StreamState {
   bytes: number;
 }
 
-const BODY_PREVIEW_LIMIT = 2000;
-const RESPONSE_PREVIEW_LIMIT = 1500;
-
 /**
  * Summarises an incoming body for the log: parameters, message count, stream
- * flag and a truncated pretty-printed copy. Bodies are never kept in full.
+ * flag and the pretty-printed body. The detail keeps the full text so a long
+ * prompt can be inspected on the Server screen.
  */
 function describeBody(body: string): {
   detail?: string;
@@ -73,7 +71,7 @@ function describeBody(body: string): {
   try {
     const parsed = JSON.parse(body);
     if (!parsed || typeof parsed !== 'object') {
-      return {detail: truncate(body, BODY_PREVIEW_LIMIT)};
+      return {detail: truncate(body)};
     }
     const record = parsed as Record<string, unknown>;
     return {
@@ -84,7 +82,7 @@ function describeBody(body: string): {
         : undefined,
     };
   } catch {
-    return {detail: truncate(body, BODY_PREVIEW_LIMIT)};
+    return {detail: truncate(body)};
   }
 }
 
@@ -359,7 +357,7 @@ export class ServerRequestHandler {
           result,
           detail: prettyJson({
             finish_reason: finishReasonFromResult(result),
-            content: truncate(finalContent, RESPONSE_PREVIEW_LIMIT),
+            content: truncate(finalContent),
           }),
         });
         return;
@@ -382,7 +380,7 @@ export class ServerRequestHandler {
         result,
         detail: prettyJson({
           finish_reason: finishReasonFromResult(result),
-          content: truncate(content, RESPONSE_PREVIEW_LIMIT),
+          content: truncate(content),
         }),
       });
     }
@@ -461,10 +459,7 @@ export class ServerRequestHandler {
         result,
         detail: prettyJson({
           finish_reason: finishReasonFromResult(result),
-          content: truncate(
-            streamed || result.text || '',
-            RESPONSE_PREVIEW_LIMIT,
-          ),
+          content: truncate(streamed || result.text || ''),
         }),
       });
       return;
@@ -485,7 +480,7 @@ export class ServerRequestHandler {
       result,
       detail: prettyJson({
         finish_reason: finishReasonFromResult(result),
-        content: truncate(text, RESPONSE_PREVIEW_LIMIT),
+        content: truncate(text),
       }),
     });
   }

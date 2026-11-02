@@ -185,6 +185,28 @@ describe('chat completions', () => {
     expect(logs[1].detail).toContain('stop');
   });
 
+  it('keeps long prompts and answers without an ellipsis', async () => {
+    const {deps, logs, completion} = createDeps();
+    const prompt = 'p'.repeat(6000);
+    const answer = 'a'.repeat(6000);
+    completion.mockResolvedValue({text: answer, content: answer});
+    const recorder = new Recorder();
+
+    await new ServerRequestHandler(deps).handle(
+      request({
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body: JSON.stringify({messages: [{role: 'user', content: prompt}]}),
+      }),
+      recorder,
+    );
+
+    expect(logs[0].detail).toContain(prompt);
+    expect(logs[1].detail).toContain(answer);
+    expect(logs[0].detail).not.toContain('…');
+    expect(logs[1].detail).not.toContain('…');
+  });
+
   it('streams cumulative content as deltas', async () => {
     const {deps, completion} = createDeps();
     completion.mockImplementation(async (_params, onToken) => {

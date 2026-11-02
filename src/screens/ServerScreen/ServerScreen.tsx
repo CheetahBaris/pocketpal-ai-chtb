@@ -18,6 +18,7 @@ import {CopyIcon} from '../../assets/icons';
 import {Dropdown} from '../../components/ui';
 import {useTheme} from '../../hooks';
 import {L10nContext} from '../../utils';
+import {formatBytes} from '../../utils/formatters';
 import {localServerStore} from '../../store';
 
 import {ServerLogList} from './ServerLogList';
@@ -77,6 +78,13 @@ export const ServerScreen: React.FC = observer(() => {
   const copyAddress = (value: string) => {
     Clipboard.setString(value);
   };
+
+  const renderResource = (label: string, value: string) => (
+    <View style={styles.resourceRow} key={label}>
+      <Text style={styles.muted}>{label}</Text>
+      <Text style={styles.resourceValue}>{value}</Text>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['bottom']}>
@@ -228,6 +236,49 @@ export const ServerScreen: React.FC = observer(() => {
                 )}
               </Text>
             ) : null}
+          </Card.Content>
+        </Card>
+
+        <Card style={styles.card}>
+          <Card.Title title={l10n.server.resourcesTitle} />
+          <Card.Content>
+            {isRunning ? (
+              <>
+                {renderResource(
+                  l10n.server.resourceCpu,
+                  `${localServerStore.cpuPercent.toFixed(0)}%`,
+                )}
+                {renderResource(
+                  l10n.server.resourceAppMemory,
+                  formatBytes(localServerStore.processMemoryBytes, 1),
+                )}
+                {renderResource(
+                  l10n.server.resourceSystemMemory,
+                  `${formatBytes(
+                    localServerStore.systemMemoryUsedBytes,
+                    1,
+                  )} / ${formatBytes(
+                    localServerStore.systemMemoryTotalBytes,
+                    1,
+                  )}`,
+                )}
+                {renderResource(
+                  l10n.server.resourceBattery,
+                  `${localServerStore.batteryLevel.toFixed(
+                    0,
+                  )}% · ${localServerStore.batteryTempC.toFixed(1)} °C`,
+                )}
+                {renderResource(
+                  l10n.server.resourceTraffic,
+                  `↓ ${formatBytes(
+                    localServerStore.trafficIn,
+                    1,
+                  )} · ↑ ${formatBytes(localServerStore.trafficOut, 1)}`,
+                )}
+              </>
+            ) : (
+              <Text style={styles.muted}>{l10n.server.resourcesIdle}</Text>
+            )}
           </Card.Content>
         </Card>
 

@@ -34,6 +34,7 @@ yarn jest src/services/localServer src/utils/__tests__/androidPermission.test.ts
 | E. Кнопки Stop / Stop+Unload | ✅ готово | кнопки на экране, методы store уже были |
 | F. Приёмка | ✅ готово | typecheck/lint/целевые тесты/Kotlin-компиляция зелёные; `assembleProdDebug` собран; ручной чек-лист F2 пройден на устройстве 2211133G (Android 16) |
 | G. Живой статус | ✅ готово | состояние генерации и tok/s на экране и в уведомлении, счётчики трафика из сокетов, статичная иконка, исправлена ошибка `onClientClosed` и ложное «client closed» |
+| H. Маскот и ресурсы | ✅ готово | иконка уведомления — маскот (силуэт в статус-баре и анимированный крупный значок во время генерации), мониторинг CPU/RAM/батареи на экране и в уведомлении, полные тела запросов/ответов в логах |
 
 Итого осталось: **только полный `yarn test` на CI/macOS** (на этой Windows-машине
 падают несвязанные тесты, см. журнал) и оформление PR.
@@ -974,3 +975,59 @@ yarn jest src/services/localServer \
 Добавлены тесты: generation-хуки вызываются (start/token/end) и `end`
 срабатывает при ошибке движка; ожидание параметров completion переведено на
 `mock.calls[0][0]`, потому что теперь всегда передаётся callback.
+
+### 2026-11-01 — сессия 5 (маскот, мониторинг ресурсов, полные логи)
+
+**1. Иконка уведомления — маскот.**
+
+- Из `src/assets/pocketpal.gif` (85 кадров, 150×150) собраны ассеты:
+  `drawable-nodpi/ic_mascot_00..11.png` — 12 кадров цветного маскота для
+  крупного значка; `drawable-xxhdpi/ic_stat_pocketpal.png` — белый силуэт
+  (глаза и улыбка вырезаны) для строки состояния. Строка состояния требует
+  монохромную иконку, поэтому там силуэт статичный.
+- `LocalServerNotifications.kt`: `setSmallIcon(R.drawable.ic_stat_pocketpal)`,
+  `setLargeIcon()` с кадром маскота, `bigText`, `subText` (ресурсы), время
+  скрыто (`setShowWhen(false)`), общий `NOTIFICATION_ID`.
+- Новый `LocalServerNotificationAnimator.kt`: пока `generating` в payload
+  равно `true`, `Handler` раз в 160 мс перепубликовывает уведомление со
+  следующим кадром (анимация «оживает»); в простое остаётся покоящийся кадр.
+  `updateNotification` теперь идёт через аниматор (а не перезапускает
+  foreground-сервис), поэтому секундные обновления не сбрасывают кадр.
+  Аниматор останавливается в `stop()`, `invalidate()` и `onDestroy()`
+  сервиса, включая кнопки Stop / Stop+Unload.
+
+**2. Мониторинг ресурсов.**
+
+- `LocalServerModule.statusMap()`: `cpuPercent` (дельта
+  `Process.getElapsedCpuTime()` к wall time, ограничение по числу ядер),
+  `processMemoryBytes` (`Debug.MemoryInfo.totalPss`),
+  `systemMemoryUsedBytes` / `systemMemoryTotalBytes` (`ActivityManager`),
+  `batteryTempC` и `batteryLevel` (sticky `ACTION_BATTERY_CHANGED`).
+- `LocalServerStore`: новые observable-поля, обновляются тем же секундным
+  тикером, что и трафик; в payload уведомления добавлены `resources` и
+  `generating`.
+- `ServerScreen.tsx`: карточка «Device resources» — CPU, память приложения,
+  системная память (использовано / всего), батарея (%, °C), трафик.
+- `en.json`: `notificationResources`, `resourcesTitle`, `resourceCpu`,
+  `resourceAppMemory`, `resourceSystemMemory`, `resourceBattery`,
+  `resourceTraffic`, `resourcesIdle`.
+
+**3. Полные логи.**
+
+- `log.ts`: `truncate` по умолчанию больше не режет на 4000 символах —
+  потолок `LOG_DETAIL_LIMIT = 1_000_000` (защита от патологического тела).
+- `requestHandler.ts`: убраны `BODY_PREVIEW_LIMIT` и
+  `RESPONSE_PREVIEW_LIMIT`; тело запроса и текст ответа пишутся целиком.
+- Тесты: длинные (6 000 символов) промпт и ответ присутствуют в `detail` без
+  многоточия; `prettyJson` сохраняет длинные значения.
+
+**Проверки.**
+
+```text
+yarn typecheck                                   OK
+yarn jest src/services/localServer              OK
+yarn lint                                        OK (0 errors)
+.\gradlew.bat :app:assembleProdDebug             BUILD SUCCESSFUL
+```
+
+Установлено на 2211133G через `adb install -r`.

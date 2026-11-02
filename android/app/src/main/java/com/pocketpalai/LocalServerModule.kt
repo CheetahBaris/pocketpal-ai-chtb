@@ -1,5 +1,10 @@
 package com.pocketpal
 
+import android.app.ActivityManager
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Debug
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -44,6 +49,11 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
 
   @Volatile private var boundPort: Int = 0
   @Volatile private var allowLan: Boolean = false
+
+  // Previous CPU sample, so getStatus() can report a rate instead of totals.
+  private var cpuSampleAt = 0L
+  private var cpuSampleCpuMs = 0L
+  private var lastCpuPercent = 0.0
 
   init {
     instanceRef = WeakReference(this)
@@ -107,6 +117,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
       closeServerSocket()
       connections.values.forEach { it.closeNow() }
       connections.clear()
+      LocalServerNotificationAnimator.stop()
       LocalServerService.hide(reactApplicationContext)
       promise.resolve(null)
     } catch (e: Exception) {
@@ -123,7 +134,8 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
       return
     }
     try {
-      LocalServerService.show(reactApplicationContext, payloadJson)
+      LocalServerNotificationAnimator.update(
+          reactApplicationContext, payloadJson)
     } catch (e: Exception) {
       Log.w(TAG, "Failed to update the server notification", e)
     }
@@ -137,6 +149,8 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
           .put("requests", 0)
           .put("status", "")
           .put("traffic", "")
+          .put("resources", "")
+          .put("generating", false)
           .put("bigText", "")
           .put("channelName", LocalServerNotifications.DEFAULT_CHANNEL_NAME)
           .put("stopLabel", LocalServerNotifications.DEFAULT_STOP)
@@ -200,6 +214,7 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
     closeServerSocket()
     connections.values.forEach { it.closeNow() }
     connections.clear()
+    LocalServerNotificationAnimator.stop()
     LocalServerService.hide(reactApplicationContext)
     instanceRef = null
     super.invalidate()
@@ -343,6 +358,67 @@ class LocalServerModule(reactContext: ReactApplicationContext) :
         putBoolean("allowLan", allowLan)
         putDouble("bytesIn", bytesIn.get().toDouble())
         putDouble("bytesOut", bytesOut.get().toDouble())
+        putDouble("cpuPercent", readCpuPercent())
+        putDouble("processMemoryBytes", readProcessMemoryBytes().toDouble())
+        val (systemUsed, systemTotal) = readSystemMemory()
+        putDouble("systemMemoryUsedBytes", systemUsed.toDouble())
+        putDouble("systemMemoryTotalBytes", systemTotal.toDouble())
+        val (batteryTemp, batteryLevel) = readBattery()
+        putDouble("batteryTempC", batteryTemp)
+        putDouble("batteryLevel", batteryLevel)
+      }
+
+  /** CPU used by this process since the previous call, relative to wall time. */
+  private fun readCpuPercent(): Double {
+    val now = System.currentTimeMillis()
+    val cpuMs = android.os.Process.getElapsedCpuTime()
+    if (cpuSampleAt > 0 && now > cpuSampleAt) {
+      val wall = (now - cpuSampleAt).toDouble()
+      val used = (cpuMs - cpuSampleCpuMs).toDouble()
+      val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+      lastCpuPercent = (used / wall * 100.0).coerceIn(0.0, cores * 100.0)
+    }
+    cpuSampleAt = now
+    cpuSampleCpuMs = cpuMs
+    return lastCpuPercent
+  }
+
+  /** Resident memory of this process (total PSS), in bytes. */
+  private fun readProcessMemoryBytes(): Long =
+      try {
+        val info = Debug.MemoryInfo()
+        Debug.getMemoryInfo(info)
+        info.totalPss.toLong() * 1024L
+      } catch (_: Exception) {
+        0L
+      }
+
+  /** Device RAM in use / total, in bytes. */
+  private fun readSystemMemory(): Pair<Long, Long> =
+      try {
+        val manager =
+            reactApplicationContext.getSystemService(ActivityManager::class.java)
+        val info = ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        Pair(info.totalMem - info.availMem, info.totalMem)
+      } catch (_: Exception) {
+        Pair(0L, 0L)
+      }
+
+  /** Battery temperature in °C and charge level in percent. */
+  private fun readBattery(): Pair<Double, Double> =
+      try {
+        val intent =
+            reactApplicationContext.registerReceiver(
+                null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val temperature =
+            (intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
+        val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
+        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val percent = if (scale > 0) level.toDouble() / scale * 100.0 else 0.0
+        Pair(temperature, percent)
+      } catch (_: Exception) {
+        Pair(0.0, 0.0)
       }
 
   private fun closeServerSocket() {

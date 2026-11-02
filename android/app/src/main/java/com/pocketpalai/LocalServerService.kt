@@ -29,11 +29,13 @@ class LocalServerService : Service() {
         startForegroundCompat(LocalServerNotifications(this).build(payloadJson))
       }
       LocalServerNotifications.ACTION_STOP_SERVER -> {
+        LocalServerNotificationAnimator.stop()
         LocalServerModule.dispatchNotificationAction(ACTION_STOP)
         stopForegroundCompat()
         stopSelf()
       }
       LocalServerNotifications.ACTION_STOP_AND_UNLOAD -> {
+        LocalServerNotificationAnimator.stop()
         LocalServerModule.dispatchNotificationAction(ACTION_STOP_AND_UNLOAD)
         stopForegroundCompat()
         stopSelf()
@@ -46,11 +48,11 @@ class LocalServerService : Service() {
   private fun startForegroundCompat(notification: Notification) {
     if (Build.VERSION.SDK_INT >= 34) {
       startForeground(
-          NOTIFICATION_ID,
+          LocalServerNotifications.NOTIFICATION_ID,
           notification,
           ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     } else {
-      startForeground(NOTIFICATION_ID, notification)
+      startForeground(LocalServerNotifications.NOTIFICATION_ID, notification)
     }
   }
 
@@ -63,6 +65,7 @@ class LocalServerService : Service() {
   }
 
   override fun onDestroy() {
+    LocalServerNotificationAnimator.stop()
     payloadJson = ""
     super.onDestroy()
   }
@@ -72,7 +75,6 @@ class LocalServerService : Service() {
     const val ACTION_STOP = "stop"
     const val ACTION_STOP_AND_UNLOAD = "stop-and-unload"
     private const val EXTRA_PAYLOAD = "payload"
-    private const val NOTIFICATION_ID = 0x5E7A
 
     @Volatile private var payloadJson: String = ""
 

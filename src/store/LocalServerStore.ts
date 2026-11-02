@@ -127,6 +127,14 @@ class LocalServerStore {
   generatedTokens = 0;
   generationRate = 0;
 
+  /** Machine load, refreshed once a second while the server is running. */
+  cpuPercent = 0;
+  processMemoryBytes = 0;
+  systemMemoryUsedBytes = 0;
+  systemMemoryTotalBytes = 0;
+  batteryTempC = 0;
+  batteryLevel = 0;
+
   // Internal counters, excluded from MobX so traffic/token ticks do not
   // re-render the screen on every token.
   trafficIn = 0;
@@ -821,6 +829,14 @@ class LocalServerStore {
       const status = await NativeLocalServer!.getStatus();
       this.trafficIn = status.bytesIn ?? 0;
       this.trafficOut = status.bytesOut ?? 0;
+      runInAction(() => {
+        this.cpuPercent = status.cpuPercent ?? 0;
+        this.processMemoryBytes = status.processMemoryBytes ?? 0;
+        this.systemMemoryUsedBytes = status.systemMemoryUsedBytes ?? 0;
+        this.systemMemoryTotalBytes = status.systemMemoryTotalBytes ?? 0;
+        this.batteryTempC = status.batteryTempC ?? 0;
+        this.batteryLevel = status.batteryLevel ?? 0;
+      });
     } catch {
       // Keep the last known counters; the listener itself is unaffected.
     }
@@ -836,6 +852,10 @@ class LocalServerStore {
     const traffic = uiStore.l10n.server.notificationTraffic
       .replace('{{in}}', formatBytes(this.trafficIn))
       .replace('{{out}}', formatBytes(this.trafficOut));
+    const resources = uiStore.l10n.server.notificationResources
+      .replace('{{cpu}}', this.cpuPercent.toFixed(0))
+      .replace('{{memory}}', formatBytes(this.processMemoryBytes))
+      .replace('{{temp}}', this.batteryTempC.toFixed(1));
     const status = this.generating
       ? uiStore.l10n.server.notificationGenerating
           .replace('{{tokens}}', String(this.generatedTokens))
@@ -846,6 +866,7 @@ class LocalServerStore {
       address,
       status,
       traffic,
+      resources,
       uiStore.l10n.server.notificationRequests.replace(
         '{{count}}',
         String(this.requestCount),
@@ -858,6 +879,8 @@ class LocalServerStore {
       requests: this.requestCount,
       status,
       traffic,
+      resources,
+      generating: this.generating,
       bigText,
       channelName: uiStore.l10n.server.notificationChannel,
       stopLabel: uiStore.l10n.server.stop,

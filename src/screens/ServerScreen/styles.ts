@@ -173,6 +173,18 @@ export const createStyles = (theme: Theme, insets: EdgeInsets) =>
       gap: theme.spacing.default / 2,
       paddingVertical: theme.spacing.default / 4,
     },
+    resourceRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: theme.spacing.default,
+      paddingVertical: theme.spacing.default / 4,
+    },
+    resourceValue: {
+      ...theme.fonts.bodyMedium,
+      color: theme.colors.onSurface,
+      fontVariant: ['tabular-nums'],
+    },
     method: {
       ...theme.fonts.labelMedium,
       color: theme.colors.primary,

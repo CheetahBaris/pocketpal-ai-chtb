@@ -38,6 +38,13 @@ describe('prettyJson', () => {
     expect(prettyJson({a: 1})).toContain('"a": 1');
   });
 
+  it('keeps long bodies intact', () => {
+    const text = 'x'.repeat(5000);
+    const json = prettyJson({content: text});
+    expect(json).toContain(text);
+    expect(json).not.toContain('…');
+  });
+
   it('swallows circular values', () => {
     const value: Record<string, unknown> = {};
     value.self = value;

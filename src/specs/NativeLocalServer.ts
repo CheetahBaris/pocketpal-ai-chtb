@@ -9,6 +9,16 @@ export interface LocalServerStatus {
   /** Socket bytes received/sent since the listener started. */
   bytesIn: number;
   bytesOut: number;
+  /** CPU used by the app process, in percent since the previous poll. */
+  cpuPercent: number;
+  /** Resident memory of the app process, in bytes. */
+  processMemoryBytes: number;
+  /** Device RAM in use and installed, in bytes. */
+  systemMemoryUsedBytes: number;
+  systemMemoryTotalBytes: number;
+  /** Battery temperature in °C and charge level in percent. */
+  batteryTempC: number;
+  batteryLevel: number;
 }
 
 /**
