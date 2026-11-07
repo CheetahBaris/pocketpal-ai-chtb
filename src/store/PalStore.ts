@@ -29,6 +29,13 @@ import {resolveHFModelForDownload} from '../utils/hfResolve';
 import {palsHubService} from '../services';
 import {registerDefaultTalents} from '../services/talents';
 import {LOOKIE_DEFAULT_MODEL} from './builtinPalModels';
+import {
+  BYEDPI_COMPLETION_SETTINGS,
+  BYEDPI_DEFAULT_MODEL,
+  BYEDPI_GREETING,
+  BYEDPI_PACT,
+  BYEDPI_SYSTEM_PROMPT,
+} from './builtinPals';
 import {chatTemplates} from '../utils/chat';
 import {defaultCompletionParams} from '../utils/completionSettingsVersions';
 import {parsePalsHubTemplate} from '../utils/palshub-template-parser';
@@ -52,6 +59,7 @@ import {downloadPalThumbnail, deletePalThumbnail} from '../utils/imageUtils';
 // (check key, find existing, create, set key) instead of a third copy.
 const LOOKIE_SEEDED_KEY = 'PalStore.builtin.Lookie.seeded';
 const PIP_SEEDED_KEY = 'PalStore.builtin.Pip.seeded';
+const BYEDPI_SEEDED_KEY = 'PalStore.builtin.ByeDPI.seeded';
 
 interface CreatorUpdateContext {
   fresh: Pal;
@@ -159,8 +167,11 @@ class PalStore {
       // Initialize Lookie pal after database is loaded
       await this.initializeLookiePal();
 
-      // Initialize Pip pal (idempotent — see initializePipPal).
+      // Initialize Pip pal (idempotent - see initializePipPal).
       await this.initializePipPal();
+
+      // Initialize the ByeDPI strategy pal (idempotent).
+      await this.initializeByeDpiPal();
 
       // Register talent engines (idempotent)
       registerDefaultTalents();
@@ -904,6 +915,54 @@ class PalStore {
       await AsyncStorage.setItem(PIP_SEEDED_KEY, 'true');
     } catch (error) {
       console.error('Error initializing Pip pal:', error);
+    }
+  }
+
+  /**
+   * Seed the built-in "ByeDPI" pal once. It carries the prompt and generation
+   * settings of the ByeByeDPI/ciadpi strategy analyst, so a fresh install can
+   * drive the strategy lab without re-pasting the prompt.
+   *
+   * Idempotent like the other built-ins: an existing pal with this name is
+   * never overwritten, so an edited prompt survives app updates.
+   */
+  private async initializeByeDpiPal(): Promise<void> {
+    try {
+      if ((await AsyncStorage.getItem(BYEDPI_SEEDED_KEY)) === 'true') {
+        return;
+      }
+
+      const existing = this.pals.find(
+        p => p.name === 'ByeDPI' && p.source === 'local',
+      );
+      if (existing) {
+        await AsyncStorage.setItem(BYEDPI_SEEDED_KEY, 'true');
+        return;
+      }
+
+      const palData: Omit<Pal, 'id' | 'created_at' | 'updated_at'> = {
+        type: 'local',
+        name: 'ByeDPI',
+        description:
+          'ByeByeDPI/ciadpi strategy analyst: reads a test run and proposes the next strategy candidates as strict JSON.',
+        systemPrompt: BYEDPI_SYSTEM_PROMPT,
+        originalSystemPrompt: BYEDPI_SYSTEM_PROMPT,
+        isSystemPromptChanged: false,
+        useAIPrompt: false,
+        defaultModel: BYEDPI_DEFAULT_MODEL,
+        parameters: {},
+        parameterSchema: [],
+        capabilities: {},
+        source: 'local',
+        completionSettings: BYEDPI_COMPLETION_SETTINGS,
+        pact: BYEDPI_PACT as Pal['pact'],
+        greeting: BYEDPI_GREETING,
+      };
+
+      await this.addPal(palData);
+      await AsyncStorage.setItem(BYEDPI_SEEDED_KEY, 'true');
+    } catch (error) {
+      console.error('Error initializing ByeDPI pal:', error);
     }
   }
 }

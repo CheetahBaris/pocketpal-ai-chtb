@@ -41,6 +41,7 @@ const EXPECTED_SECTIONS = [
   'voiceInput',
   'voiceMode',
   'plus',
+  'server',
 ];
 
 const ALL_LANGUAGES: AvailableLanguage[] = [

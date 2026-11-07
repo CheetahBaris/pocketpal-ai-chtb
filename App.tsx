@@ -53,6 +53,7 @@ import {
 import {
   ChatScreen,
   ModelsScreen,
+  ServerScreen,
   SettingsScreen,
   BenchmarkScreen,
   AboutScreen,
@@ -190,6 +191,14 @@ const App = observer(() => {
                               options={{
                                 headerStyle: styles.headerWithoutDivider,
                                 title: currentL10n.screenTitles.benchmark,
+                              }}
+                            />
+                            <Drawer.Screen
+                              name={ROUTES.SERVER}
+                              component={gestureHandlerRootHOC(ServerScreen)}
+                              options={{
+                                headerStyle: styles.headerWithoutDivider,
+                                title: currentL10n.screenTitles.server,
                               }}
                             />
                             <Drawer.Screen
