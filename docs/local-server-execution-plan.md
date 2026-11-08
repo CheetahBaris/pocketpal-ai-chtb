@@ -1123,3 +1123,11 @@ yarn typecheck                                   OK
   дальше используется он (`JAVA_HOME` + `PATH`), без сети; `setup-java@v5`
   остался только как fallback, если копии нет. Кэш Gradle вынесен в
   отдельный `actions/cache`, чтобы работать и без setup-java.
+- Прогон №2 дошёл до `yarn install` и упал на postinstall `llama.rn`:
+  `install/download-native-artifacts.js` тянет `llama-rn-android-jni-libs.tar.gz`
+  и `llama-rn-ios-xcframework.tar.gz` из GitHub Releases без повторов, а
+  зеркало ответило HTTP 503.
+  Фикс: `node_modules` кэшируется (`actions/cache`, ключ по `yarn.lock` и
+  `patches/**`, как в `ci.yml`) — тёплый прогон вообще не запускает
+  postinstall; холодный `yarn install --frozen-lockfile` выполняется с тремя
+  попытками и `--network-timeout 600000`.
