@@ -1096,3 +1096,22 @@ yarn typecheck                                   OK
 
 Обновление уведомления в фоне после фикса на устройстве ещё не проверено —
 проверяет пользователь.
+
+### 2026-11-08 — сессия 8 (GitHub Actions для Android-релиза)
+
+- Upstream `release.yml` в форке не запускается: ему нужны GCP, Play Store
+  service account, fastlane match и App Store Connect — секретов форка на всё
+  это нет.
+- Добавлен отдельный workflow `.github/workflows/android-release.yml` без
+  секретов: JDK 17 + Node 22.21.0 + `yarn install` → dummy
+  `google-services.json` → `:app:assembleProdDebug` (или `ProdRelease`, если
+  нужно) → APK в артефакты и в GitHub Release.
+  Подпись берётся из закоммиченного `android/app/debug.keystore`, поэтому APK
+  ставится поверх уже установленной сборки; release-вариант без секретов
+  подписи сам откатывается на debug-ключ (`android/app/build.gradle`).
+- Входные параметры запуска: тег релиза (пусто — генерируется), вариант
+  (debug/release), список ABI (по умолчанию `arm64-v8a`, пусто — все), и
+  публиковать ли Release. При повторном запуске с тем же тегом asset
+  перезаписывается (`overwrite_files`).
+- Локально проверено: YAML парсится, все `run:`-шаги проходят `bash -n`.
+  Сам workflow прогоняется пользователем на GitHub.

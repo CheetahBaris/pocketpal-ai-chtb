@@ -1,0 +1,214 @@
+name: Android Release (fork)
+
+# Builds an installable Android APK and attaches it to a GitHub Release.
+#
+# Why a separate workflow: the upstream `release.yml` needs GCP, Play Store,
+# fastlane match and App Store Connect credentials that a fork does not have, so
+# it cannot run here. This one needs no secrets at all —
+#   * `android/app/debug.keystore` is committed, so `assembleProdDebug` is signed
+#     out of the box and the APK updates an already installed build;
+#   * `assembleProdRelease` falls back to the same debug keystore when no release
+#     signing secrets are present (see android/app/build.gradle);
+#   * google-services.json is generated as a dummy, exactly like ci.yml does.
+#
+# Run it from Actions → "Android Release (fork)" → Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.21.2-local-server). Empty = android-<version>-<date>-<run>'
+        required: false
+        default: ''
+      variant:
+        description: 'Build variant'
+        required: true
+        type: choice
+        default: debug
+        options:
+          - debug
+          - release
+      abis:
+        description: 'Comma separated ABIs (empty = all; arm64-v8a covers modern phones)'
+        required: false
+        default: 'arm64-v8a'
+      publish:
+        description: 'Create or update the GitHub Release with the APK'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ~14 GB free is not enough for a from-source llama.rn build plus the
+      # Android SDK; the runner image ships several GB of toolchains we do not
+      # use. Same trim as ci.yml.
+      - name: Maximize build space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+          df -h /
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.21.0'
+          cache: yarn
+
+      - name: Install Yarn
+        run: npm install -g yarn@1.22.22
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # com.google.gms.google-services is applied unconditionally, but the file
+      # is gitignored. A dummy keeps the build tool happy; it carries no real
+      # project.
+      - name: Create dummy google-services.json
+        run: |
+          cat > android/app/google-services.json << 'EOL'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "dummy-project-for-ci",
+              "storage_bucket": "dummy-project-for-ci.appspot.com"
+            },
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                "android_client_info": {
+                  "package_name": "com.pocketpalai"
+                }
+              },
+              "api_key": [{
+                "current_key": "dummy-api-key-for-ci-builds"
+              }]
+            }]
+          }
+          EOL
+
+      - name: Build APK
+        working-directory: android
+        env:
+          # Empty by default: unset means "every ABI", which is what a universal
+          # APK needs. Set in the workflow inputs to cut build time.
+          ABIS: ${{ inputs.abis }}
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          set -euo pipefail
+          TASK=":app:assembleProdDebug"
+          if [ "$VARIANT" = "release" ]; then
+            TASK=":app:assembleProdRelease"
+          fi
+          GRADLE_ARGS=(--no-daemon --stacktrace --warning-mode=summary)
+          if [ -n "${ABIS:-}" ]; then
+            GRADLE_ARGS+=("-PreactNativeArchitectures=${ABIS}")
+          fi
+          ./gradlew "$TASK" "${GRADLE_ARGS[@]}"
+
+      - name: Collect the APK
+        id: apk
+        env:
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          set -euo pipefail
+          if [ "$VARIANT" = "release" ]; then
+            APK="android/app/build/outputs/apk/prod/release/app-prod-release.apk"
+          else
+            APK="android/app/build/outputs/apk/prod/debug/app-prod-debug.apk"
+          fi
+          if [ ! -f "$APK" ]; then
+            echo "::error::Expected APK not found: $APK"
+            find android/app/build/outputs -name '*.apk' -print || true
+            exit 1
+          fi
+          VERSION=$(tr -d '[:space:]' < .version)
+          NAME="PocketPal-${VERSION}-${VARIANT}.apk"
+          mkdir -p dist
+          cp "$APK" "dist/$NAME"
+          {
+            echo "path=dist/$NAME"
+            echo "name=$NAME"
+            echo "version=$VERSION"
+            echo "sha256=$(sha256sum "dist/$NAME" | cut -d' ' -f1)"
+            echo "size=$(stat -c%s "dist/$NAME")"
+          } >> "$GITHUB_OUTPUT"
+          ls -lh dist
+
+      - name: Upload the APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.path }}
+          retention-days: 30
+
+      - name: Resolve the release tag
+        id: meta
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_INPUT:-}"
+          if [ -z "$TAG" ]; then
+            TAG="android-${{ steps.apk.outputs.version }}-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using tag: $TAG"
+
+      # Same repository tag + same asset name means a re-run replaces the APK
+      # instead of failing on "asset already exists".
+      - name: Publish the GitHub Release
+        if: ${{ inputs.publish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: PocketPal ${{ steps.apk.outputs.version }} (Android ${{ inputs.variant }})
+          body: |
+            Android ${{ inputs.variant }} build from `${{ github.sha }}`.
+
+            - variant: `${{ inputs.variant }}`
+            - ABIs: `${{ inputs.abis || 'all' }}`
+            - size: ${{ steps.apk.outputs.size }} bytes
+            - sha256: `${{ steps.apk.outputs.sha256 }}`
+
+            ```bash
+            adb install -r ${{ steps.apk.outputs.name }}
+            ```
+          files: ${{ steps.apk.outputs.path }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
+
+      - name: Summary
+        run: |
+          {
+            echo "### Android ${{ inputs.variant }} build"
+            echo
+            echo "- APK: \`${{ steps.apk.outputs.path }}\`"
+            echo "- Size: ${{ steps.apk.outputs.size }} bytes"
+            echo "- SHA-256: \`${{ steps.apk.outputs.sha256 }}\`"
+            echo "- Tag: \`${{ steps.meta.outputs.tag }}\`"
+            echo "- Release: ${{ inputs.publish }}"
+          } >> "$GITHUB_STEP_SUMMARY"
