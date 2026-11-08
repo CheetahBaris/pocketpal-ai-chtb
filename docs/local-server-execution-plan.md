@@ -1131,3 +1131,15 @@ yarn typecheck                                   OK
   `patches/**`, как в `ci.yml`) — тёплый прогон вообще не запускает
   postinstall; холодный `yarn install --frozen-lockfile` выполняется с тремя
   попытками и `--network-timeout 600000`.
+- Прогон №3 упал там же, но причина уже внешняя: 8 ноября с 10:36 UTC у GitHub
+  открыт инцидент «Increase in timeouts for some unauthenticated users».
+  Анонимные скачивания release-ассетов отдавали 503, и `CI Pipeline` в этом же
+  репозитории падал на том же шаге `Install dependencies` (вчера — зелёный).
+  Проверено также с локальной машины: и `github.com/…/releases/download`, и
+  `api.github.com/repos/…/releases/assets/{id}` недоступны.
+  Что сделано в workflow, чтобы такие сбои переживались:
+  `RNLLAMA_SKIP_POSTINSTALL=1` + собственный шаг загрузки только Android-архива
+  (50 МБ вместо 50 + 309 МБ iOS, который Android-сборке не нужен), 5 попыток с
+  растущей паузой, сверка SHA-256 с манифестом llama.rn и распаковка туда же,
+  куда это делал postinstall. Повторный прогон с тёплым кэшем `node_modules`
+  сетевое скачивание не выполняет вовсе.
