@@ -112,11 +112,37 @@ jobs:
           node-version: '22.21.0'
           cache: yarn
 
+      # llama.rn's postinstall downloads the Android JNI libs and the iOS
+      # xcframework from its GitHub release, with no retry. Both failed with
+      # HTTP 503 on an earlier run. Caching node_modules (like ci.yml does)
+      # means a warm run never runs that postinstall at all.
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('yarn.lock', 'patches/**') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
       - name: Install Yarn
         run: npm install -g yarn@1.22.22
 
+      # Retried because a cold run pulls multi-hundred-MB artifacts from
+      # GitHub releases, and those downloads fail transiently.
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            if yarn install --frozen-lockfile --network-timeout 600000; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "::error::yarn install failed after 3 attempts"
+              exit 1
+            fi
+            echo "::warning::yarn install failed (attempt $attempt/3), retrying"
+            sleep $((attempt * 20))
+          done
 
       # com.google.gms.google-services is applied unconditionally, but the file
       # is gitignored. A dummy keeps the build tool happy; it carries no real
