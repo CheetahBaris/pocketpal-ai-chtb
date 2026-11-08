@@ -1115,3 +1115,11 @@ yarn typecheck                                   OK
   перезаписывается (`overwrite_files`).
 - Локально проверено: YAML парсится, все `run:`-шаги проходят `bash -n`.
   Сам workflow прогоняется пользователем на GitHub.
+- Прогон №1 упал на `actions/setup-java`: скачивание Temurin JDK с зеркала
+  Adoptium вернуло HTTP 504 (две попытки подряд). Причина — шаг «Maximize
+  build space» удаляет `/opt/hostedtoolcache`, где лежит предустановленный
+  JDK 17, после чего setup-java обязан качать JDK заново.
+  Фикс: перед тримом предустановленный JDK 17 копируется в `/opt/jdk17`, и
+  дальше используется он (`JAVA_HOME` + `PATH`), без сети; `setup-java@v5`
+  остался только как fallback, если копии нет. Кэш Gradle вынесен в
+  отдельный `actions/cache`, чтобы работать и без setup-java.
