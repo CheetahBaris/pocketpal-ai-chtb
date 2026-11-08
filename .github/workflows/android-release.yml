@@ -113,8 +113,9 @@ jobs:
       - name: Build APK
         working-directory: android
         env:
-          # Empty by default: unset means "every ABI", which is what a universal
-          # APK needs. Set in the workflow inputs to cut build time.
+          # Left empty the property is not passed, so gradle.properties picks the
+          # ABI set. The default input narrows it to arm64-v8a: it covers modern
+          # phones and roughly halves the build time and APK size.
           ABIS: ${{ inputs.abis }}
           VARIANT: ${{ inputs.variant }}
         run: |
